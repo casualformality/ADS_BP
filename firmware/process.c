@@ -47,6 +47,7 @@ float32_t xvN[NPOLES+1][8];
 float32_t yvN[NPOLES+1][8];
 volatile unsigned char nChannels = 8;
 volatile unsigned char filterEnable = 1;
+volatile unsigned char compressionEnable = 0;
 volatile float32_t temperatureMCU = 0;
 volatile float32_t batteryVoltage = 0;
 volatile float32_t batteryTemperature = 0;
@@ -222,6 +223,29 @@ float32_t FilterSample(float32_t inData, unsigned char filterIndex) {
 		tempFloatValue2 = FilterHP(tempFloatValue, filterIndex, sF);
 	}
 	return tempFloatValue2;
+
+}
+
+/**
+ * \brief This function is used to compress data before transmitting it.
+ * @param[in] inData float input value
+ * @return q15-formatted output valut
+ *
+ * This function used M-Law companding to adjust the dynamic range of the
+ * input value (between -1.0 and +1.0) before formatting it to a Q15 fixed-
+ * point output value.
+ */
+uint16_t CompressSample(float32_t inData) {
+
+    float32_t tempFloatValue;
+    uint16_t  compressedValue;
+
+    // F(x) = sgn(x)*ln(1+M*|x|)/ln(1+M) for -1 <= x <= 1
+    tempFloatValue = (inData >= 0.0f) ? (1.0f) : (-1.0f);
+    tempFloatValue = tempFloatValue * log(1+255*fabs(tempFloatValue)) / log(256);
+    arm_float_to_q15(&tempFloatValue, (q15_t *) &compressedValue, 1);
+
+    return compressedValue;
 
 }
 

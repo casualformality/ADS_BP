@@ -77,6 +77,7 @@ volatile unsigned char btStatus = WT12_NOTPRESENT;
 
 extern volatile unsigned char nChannels;
 extern volatile unsigned char filterEnable;
+extern volatile unsigned char compressionEnable;
 extern const float32_t lsbVolt;
 extern volatile unsigned char btStatus;
 extern volatile float32_t temperatureMCU;
@@ -145,6 +146,12 @@ void COMM_IntHandler(void) {
 			ADS1299SetDataRate(received);
 			UARTSendByte(ADS1299_DATARATE_SET);
 		break;
+        case COMPRESSION_ENABLE_SET: // Enable m-Law/q15 compression
+            UARTSendByte(COMPRESSION_ENABLE_SET);
+            received = UARTCharGet(COMM_UARTPORT);
+            compressionEnable = received;
+            UARTSendByte(COMPRESSION_ENABLE_SET);
+        break;
 		case SAMPLING_FREQ_SET: // Set the sampling frequency
 			UARTSendByte(SAMPLING_FREQ_SET);
 			UARTReceive4Bytes((uint32_t *)&sF);
@@ -228,6 +235,7 @@ void Timer0IntHandler(void)
 
 	int32_t channels[8];
 	float32_t newSample[8];
+    uint16_t comSample[8];
 	unsigned char iCh = 0;
 	float32_t tempFloatValue;
     uint32_t dSamp;
@@ -254,6 +262,10 @@ void Timer0IntHandler(void)
 			tempFloatValue = lsbVolt * (float32_t)channels[iCh];
 			// process data with IIR filters
 			newSample[iCh] = FilterSample(tempFloatValue, iCh);
+            // optionally compress data before transmitting
+            if(compressionEnable) {
+                comSample[iCh] = CompressSample(newSample[iCh]);
+            }
 		}
 
 		// Do whatever needs to be done accordingly to the state machine
@@ -263,7 +275,11 @@ void Timer0IntHandler(void)
 			case ACQUIRE_EMG:
 				for(iCh=0; iCh<nChannels; iCh++) {
 					// send via UART
-					UARTSend4Bytes((unsigned char *)&newSample[iCh]);
+                    if(compressionEnable) {
+                        UARTSend2Bytes((unsigned char *)&comSample[iCh]);
+                    } else {
+					    UARTSend4Bytes((unsigned char *)&newSample[iCh]);
+                    }
 				}
 			break;
 			default:

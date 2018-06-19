@@ -38,10 +38,12 @@
 #define DEVNAME_FIRMWAREV_READ	 0xA0
 #define ADS1299_REGS_READ		 'S'
 #define FILTERS_ENABLE_SET		 'H'
+#define COMPRESSION_ENABLE_SET   'Q'
 #define ADS1299_GAIN_SET		 'K'
 #define ADS1299_DATARATE_SET	 'F'
 #define SAMPLING_FREQ_SET		 'r'
 #define TEST_SIGNAL_ENABLE_SET   'P'
+#define BATTERY_CHECK            'B'
 #define START_ACQ			 	 'G'
 #define STOP_ACQ				 'T'
 
@@ -59,6 +61,7 @@
 /* prototypes */
 void ResetFilterArrays(unsigned char nCh);
 float32_t FilterSample(float32_t inData, unsigned char filterIndex);
+uint16_t CompressSample(float32_t inData);
 void UARTReceive4Bytes(uint32_t *ptr);
 void UARTSend4Bytes(unsigned char *ptr);
 void UARTSendByte(unsigned char byte);
