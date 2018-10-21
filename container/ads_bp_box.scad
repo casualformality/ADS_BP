@@ -219,6 +219,14 @@ module lower_box() {
     translate([2.5,1.5*eps,inner_hgt-12.25]) screw_mount();
     translate([inner_len-2.5,1.5*eps,inner_hgt-12.25]) 
         rotate([0,0,180]) screw_mount();
+    
+    translate([2.5,1.5*eps,inner_hgt-12.5]) screw_mount();
+    translate([inner_len-2.5,1.5*eps,inner_hgt-12.5]) 
+        rotate([0,0,180]) screw_mount();
+    
+    translate([2.5,inner_wid-1.5*eps,inner_hgt-12.5]) screw_mount();
+    translate([inner_len-2.5,inner_wid-1.5*eps,inner_hgt-12.5]) 
+        rotate([0,0,180]) screw_mount();
 }
 
 module upper_box() {
@@ -244,6 +252,9 @@ module upper_box() {
         $fn=20;
         translate([2.5,1.5*eps,inner_hgt-eps]) cylinder(d=2.5,h=3*eps);
         translate([inner_len-2.5,1.5*eps,inner_hgt-eps]) 
+            cylinder(d=2.5,h=3*eps);
+        translate([2.5,inner_wid-1.5*eps,inner_hgt-eps]) cylinder(d=2.5,h=3*eps);
+        translate([inner_len-2.5,inner_wid-1.5*eps,inner_hgt-eps]) 
             cylinder(d=2.5,h=3*eps);
     }
     

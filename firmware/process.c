@@ -37,6 +37,12 @@
 /* prototypes */
 float32_t FilterHP(float32_t inData, unsigned char ch, uint32_t frequency);
 float32_t FilterNOTCH(float32_t inData, unsigned char ch, uint32_t frequency);
+void SWTTimeWindow(float32_t *ptrTWs);
+void ISWTTimeWindow(float32_t *ptrTWs);
+void DenoiseCoefficients(void);
+void DeartifactCoefficients(void);
+void circ_conv_f32(float32_t *pSrcA, uint32_t srcALen,
+        float32_t *pSrcB, uint32_t srcBLen, float32_t *pDst);
 
 
 /* global variables */
@@ -46,11 +52,16 @@ float32_t yv[NZEROS+1][8];
 float32_t xvN[NPOLES+1][8];
 float32_t yvN[NPOLES+1][8];
 volatile unsigned char nChannels = 8;
+volatile unsigned char nMovements = NO_MOVEMENTS;
+volatile unsigned char nFeatures = 5;
+volatile unsigned int timeWindowSamples = TIME_WINDOW_SAMPLES;
+volatile unsigned int timeWindowIncrSamples = WINDOW_INCREMENT_SAMPLES;
+volatile timeWindow tWs;
+volatile incrementalWindow incrWs;
+features feat;
+float32_t featVector[FEATURES_SIZE];
 volatile unsigned char filterEnable = 1;
 volatile unsigned char compressionEnable = 0;
-volatile float32_t temperatureMCU = 0;
-volatile float32_t batteryVoltage = 0;
-volatile float32_t batteryTemperature = 0;
 extern volatile uint32_t sF;
 
 

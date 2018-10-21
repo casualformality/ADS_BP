@@ -128,11 +128,49 @@ void COMM_IntHandler(void) {
 				UARTSendByte(reg[i+1]);
 			UARTSendByte(ADS1299_REGS_READ);
 		break;
+		case SAMPLING_FREQ_SET: // Set the sampling frequency
+			UARTSendByte(SAMPLING_FREQ_SET);
+			UARTReceive4Bytes((uint32_t *)&sF);
+			if(sF!=500 && sF!=1000 && sF!= 2000)
+				sF = 1000;
+            timeWindowSamples = 0.200*sF;
+            overlappingSamples = 0.050*sF;
+            if(waveletMode) {
+                UpdateWaveletCoefficients();
+            }
+			UARTSendByte(SAMPLING_FREQ_SET);
+		break;
 		case FILTERS_ENABLE_SET: // Enable/Disable Filters
 			UARTSendByte(FILTERS_ENABLE_SET);
 			received = UARTCharGet(COMM_UARTPORT);
 			filterEnable = received;
 			UARTSendByte(FILTERS_ENABLE_SET);
+		break;
+		case WAVELET_ENABLE_SET:
+			UARTSendByte(WAVELET_ENABLE_SET);
+			received = UARTCharGet(COMM_UARTPORT);
+			waveletMode = received;
+			if(waveletMode) {
+				UpdateWaveletCoefficients();
+			}
+			UARTSendByte(WAVELET_ENABLE_SET);
+		break;
+		case TEST_FILTERS: // Test Filters with external data
+			UARTSendByte(TEST_FILTERS);
+			backup = filterEnable;
+			filterEnable = 1;
+			nChannels = UARTCharGet(COMM_UARTPORT);
+			ResetFilterArrays(nChannels);
+			UARTReceive4Bytes(&samples);
+			for(k=0; k<samples; k++) {
+				for(i=0; i<nChannels; i++) {
+					UARTReceive4Bytes(&tempFloatValue);
+					sampleFloatValue = FilterSample(tempFloatValue, i);
+					UARTSend4Bytes((unsigned char *)&sampleFloatValue);
+				}
+			}
+			filterEnable = backup;
+			UARTSendByte(TEST_FILTERS);
 		break;
 		case ADS1299_GAIN_SET: // Set ADS1299 Gain
 			UARTSendByte(ADS1299_GAIN_SET);
@@ -152,39 +190,41 @@ void COMM_IntHandler(void) {
             compressionEnable = received;
             UARTSendByte(COMPRESSION_ENABLE_SET);
         break;
-		case SAMPLING_FREQ_SET: // Set the sampling frequency
-			UARTSendByte(SAMPLING_FREQ_SET);
-			UARTReceive4Bytes((uint32_t *)&sF);
-			if(sF!=500 && sF!=1000 && sF!= 2000)
-				sF = 1000;
-			UARTSendByte(SAMPLING_FREQ_SET);
-		break;
 		case TEST_SIGNAL_ENABLE_SET: // Enable ADS1299 internal test signal
 			UARTSendByte(TEST_SIGNAL_ENABLE_SET);
 			received = UARTCharGet(COMM_UARTPORT);
 			ADS1299TestSignal(received);
 			UARTSendByte(TEST_SIGNAL_ENABLE_SET);
 		break;
-		case START_ACQ: // Start EMG continuous acquisition
+		case START_RAW_ACQ: // Start EMG continuous acquisition
 			alcdState = ACQUIRE_EMG;
+			alcdMode = COMMAND_MODE;
 			nChannels = UARTCharGet(COMM_UARTPORT);
 			if(nChannels>8)
 				nChannels = 8;
-			TimerDisable(TIMER2_BASE, TIMER_A);
 			TimerLoadSet(TIMER2_BASE, TIMER_A, clockFreq/10);
-			TimerEnable(TIMER2_BASE, TIMER_A);
 			ADS1299ReadContinuousMode();
-			TimerDisable(TIMER0_BASE, TIMER_A);
 			TimerLoadSet(TIMER0_BASE, TIMER_A, clockFreq/sF);
 			TimerEnable(TIMER0_BASE, TIMER_A);
-			UARTSendByte(START_ACQ);
+			UARTSendByte(START_RAW_ACQ);
+		break;
+		case START_FEATURES_ACQ: // Start EMG acquisition and features extraction and transmission
+			alcdState = ACQUIRE_INCREMENT_TW;
+			samplesCounter = 0;
+			alcdMode = TEST_FEATURES;
+			leadoffDetected = 0;
+			nChannels = UARTCharGet(COMM_UARTPORT);
+			TimerLoadSet(TIMER2_BASE, TIMER_A, clockFreq/10);
+			ADS1299ReadContinuousMode();
+			TimerLoadSet(TIMER0_BASE, TIMER_A, clockFreq/sF);
+			TimerEnable(TIMER0_BASE, TIMER_A);
+			UARTSendByte(START_FEATURES_ACQ);
 		break;
 		case STOP_ACQ: // Stop EMG continuous acquisition
 			alcdState = IDLE;
+			alcdMode = COMMAND_MODE;
 			TimerDisable(TIMER0_BASE, TIMER_A);
-			TimerDisable(TIMER2_BASE, TIMER_A);
 			TimerLoadSet(TIMER2_BASE, TIMER_A, clockFreq);
-			TimerEnable(TIMER2_BASE, TIMER_A);
 			ADS1299StopContinuousMode();
 			TimerIntClear(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
 			UARTSendByte(STOP_ACQ);
