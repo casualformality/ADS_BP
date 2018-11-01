@@ -81,8 +81,7 @@ extern volatile unsigned char compressionEnable;
 extern const float32_t lsbVolt;
 extern volatile unsigned char btStatus;
 extern volatile float32_t temperatureMCU;
-extern volatile float32_t batteryVoltage;
-extern volatile float32_t batteryTemperature;
+extern volatile float32_t batterySOC;
 
 // Only for test
 int32_t	priorityCOMM = 100;
@@ -172,6 +171,10 @@ void COMM_IntHandler(void) {
 			filterEnable = backup;
 			UARTSendByte(TEST_FILTERS);
 		break;
+        case BATTERY_CHECK:
+            UARTSendByte(BATTERY_CHECK);
+            batterySOC = (float32_t) BattReadSOC();
+            UARTSendByte(BATTERY_CHECK);
 		case ADS1299_GAIN_SET: // Set ADS1299 Gain
 			UARTSendByte(ADS1299_GAIN_SET);
 			received = UARTCharGet(COMM_UARTPORT);
@@ -419,7 +422,7 @@ int main(void) {
  * - System Clock at 80 Mhz
  * - All needed GPIOs
  * - LEDs output pins
- * - Analog pin for battery voltage/temperature reading
+ * - I2C for battery State of Charge (SOC) reading
  * - UART for external communication
  * - SPI for ADS1299
  * - ADS1299
@@ -473,6 +476,18 @@ void DeviceInit(void) {
 	SSIEnable(ADS_SSI_BASE);
 	uint32_t ulDataRx;
 	while(SSIDataGetNonBlocking(ADS_SSI_BASE, &ulDataRx)){}
+
+	/* =================I2C Initialization======================= */
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_I2C0);
+    SysCtlPeripheralReset(SYSCTL_PERIPH_I2C0);
+    GPIOPinConfigure(GPIO_PB2_I2C0SCL);
+    GPIOPinConfigure(GPIO_PB3_I2C0SDA);
+    GPIOPinTypeI2CSCL(GPIO_PORTB_BASE, GPIO_PIN_2);
+    GPIOPinTypeI2C(GPIO_PORTB_BASE, GPIO_PIN_3);
+    I2CMasterInitExpClk(I2C0_BASE, SysCtlClockGet(), false);
+    I2CMasterTimeoutSet(I2C0_BASE, 0xFF);
+    //clear I2C FIFOs
+    HWREG(I2C0_BASE + I2C_O_FIFOCTL) = 80008000;
 
 	/* =================TIMER Initialization======================= */
 	SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER0);	// ADS1299 samples reading timeout

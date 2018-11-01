@@ -89,6 +89,11 @@
 #define WT12_PRESENT            0x01
 #define WT12_CONNECTED          0x02
 
+// BATTPACK module
+#define BATT_I2C_ADDR           0x55
+#define BATT_SOC_READ_LOW       0x1C
+#define BATT_SOC_READ_HIGH      0x1D
+
 /* structures */
 typedef struct
 {
@@ -154,6 +159,7 @@ uint16_t CompressSample(float32_t inData);
 void UARTReceive4Bytes(uint32_t *ptr);
 void UARTSend4Bytes(unsigned char *ptr);
 void UARTSendByte(unsigned char byte);
+uint16_t SPIReadSOC(void);
 
 unsigned char SVMclassify(unsigned char nCh, unsigned char nMov);
 unsigned char DiscriminantTestLDA(unsigned char nCh, unsigned char nMov);

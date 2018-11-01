@@ -63,6 +63,7 @@ float32_t featVector[FEATURES_SIZE];
 volatile unsigned char filterEnable = 1;
 volatile unsigned char compressionEnable = 0;
 extern volatile uint32_t sF;
+volatile unsigned char batteryPresent = 1;
 
 
 /* functions */
@@ -320,4 +321,45 @@ void UARTSendByte(unsigned char byte) {
 
 	UARTCharPut(COMM_UARTPORT,byte);
 
+}
+
+bool I2CMasterTimeout(uint32_t ui32Base) {
+    if(HWREG(ui32Base + I2C_O_MCS) & I2C_MCS_CLKTO) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+uint16_t BattReadSOC(void) {
+    uint8_t     soc_8[2];
+    uint16_t    soc_16;
+
+    if (!batteryPresent) {
+        return 0xFFFF;
+    }
+
+    I2CMasterSlaveAddrSet(I2C0_BASE, BATT_I2C_ADDR, false);
+    I2CMasterDataPut(I2C0_BASE, BATT_SOC_READ_LOW);
+    I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_SINGLE_SEND);
+    while(I2CMasterBusy(I2C0_BASE) && !I2CMasterTimeout(I2C0_BASE));
+    if (I2CMasterTimeout(I2C0_BASE) {
+        batteryPresent = false;
+        return 0xFFFF;
+    }
+    soc_8[0] = I2CMasterDataGet(I2C0_BASE);
+    
+    I2CMasterSlaveAddrSet(I2C0_BASE, BATT_I2C_ADDR, false);
+    I2CMasterDataPut(I2C0_BASE, BATT_SOC_READ_HIGH);
+    I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_SINGLE_SEND);
+    while(I2CMasterBusy(I2C0_BASE) && !I2CMasterTimeout(I2C0_BASE));
+    if (I2CMasterTimeout(I2C0_BASE) {
+        batteryPresent = false;
+        return 0xFFFF;
+    }
+    soc_8[1] = I2CMasterDataGet(I2C0_BASE);
+
+    soc_16 = soc_8[0] | (soc_8[1] << 8);
+
+    return soc_16;
 }
