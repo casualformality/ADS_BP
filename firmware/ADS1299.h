@@ -34,7 +34,7 @@
 #define ADS_NRST_PIN   	      	GPIO_PIN_2			// check: PD7 needs to be unlocked first
 #define ADS_START_PORT   	    GPIO_PORTD_BASE
 #define ADS_START_PIN   	    GPIO_PIN_1
-#define ADS_NCS_PORT   	      	GPIO_PORTA_BASE
+#define ADS_NCS_PORT   	      	GPIO_PORTD_BASE
 #define ADS_NCS_PIN   	      	GPIO_PIN_0
 #define ADS_SSI_PHERIPH			SYSCTL_PERIPH_SSI0
 #define ADS_SSI_BASE			SSI0_BASE

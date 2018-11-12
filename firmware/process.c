@@ -52,14 +52,6 @@ float32_t yv[NZEROS+1][8];
 float32_t xvN[NPOLES+1][8];
 float32_t yvN[NPOLES+1][8];
 volatile unsigned char nChannels = 8;
-volatile unsigned char nMovements = NO_MOVEMENTS;
-volatile unsigned char nFeatures = 5;
-volatile unsigned int timeWindowSamples = TIME_WINDOW_SAMPLES;
-volatile unsigned int timeWindowIncrSamples = WINDOW_INCREMENT_SAMPLES;
-volatile timeWindow tWs;
-volatile incrementalWindow incrWs;
-features feat;
-float32_t featVector[FEATURES_SIZE];
 volatile unsigned char filterEnable = 1;
 volatile unsigned char compressionEnable = 0;
 extern volatile uint32_t sF;
@@ -240,26 +232,58 @@ float32_t FilterSample(float32_t inData, unsigned char filterIndex) {
 
 /**
  * \brief This function is used to compress data before transmitting it.
- * @param[in] inData float input value
- * @return q15-formatted output valut
+ * @param[in] src int32_t array of input values
+ * @param[in] len uint8_t length of source array
+ * @param[out] dst int16_t array of destination array
  *
- * This function used M-Law companding to adjust the dynamic range of the
- * input value (between -1.0 and +1.0) before formatting it to a Q15 fixed-
- * point output value.
+ * This function extends Mu-Law companding for compressing 32-bit values.
  */
-uint16_t CompressSample(float32_t inData) {
+void CompressSamples(float32_t *src, uint8_t len, int16_t *dst)
+{
+    const uint32_t MULAW_EXT_MAX = 0x1FFFFFF;
+    const uint32_t MULAW_EXT_BIAS = 0x2100;
+    uint32_t mask;
+    uint16_t sign, position, lsb;
+    uint8_t idx;
+    int32_t number;
 
-    float32_t tempFloatValue;
-    uint16_t  compressedValue;
+    for (idx = 0; idx < len; idx++) {
+        mask = 0x1000000;
+        sign = 0;
+        position = 24;
+        lsb = 0;
+        number = (int32_t) (*src * 16777216.0f);
 
-    // F(x) = sgn(x)*ln(1+M*|x|)/ln(1+M) for -1 <= x <= 1
-    tempFloatValue = (inData >= 0.0f) ? (1.0f) : (-1.0f);
-    tempFloatValue = tempFloatValue * log(1+255*fabs(tempFloatValue)) / log(256);
-    arm_float_to_q15(&tempFloatValue, (q15_t *) &compressedValue, 1);
+        // Extract sign
+        if (number < 0)
+        {
+            number = -number;
+            sign = 0x8000;
+        }
 
-    return compressedValue;
+        // Add bias to ensure non-zero positions within the first 9 digits
+        number += MULAW_EXT_BIAS;
 
+        // Clip number to valid range
+        if (number > MULAW_EXT_MAX) {
+            number = MULAW_EXT_MAX;
+        }
+
+        // Calculate segment number
+        for(; ((number & mask) != mask && position >= 9); mask >>= 1, position--)
+            ;
+
+        // Calculate quantization bits
+        lsb = (number >> (position - 8)) & 0x00FF;
+
+        // Generate compressed sample
+        *dst =  (~(sign | ((position - 9) << 8) | lsb));
+
+        src++;
+        dst++;
+    }
 }
+
 
 /**
  * \brief This function can be used to easily handle the reception on the
@@ -331,7 +355,31 @@ bool I2CMasterTimeout(uint32_t ui32Base) {
     }
 }
 
-uint16_t BattReadSOC(void) {
+bool I2CReadBattery(uint8_t cmd, uint8_t *dst) {
+    uint8_t     data;
+
+    I2CMasterSlaveAddrSet(I2C1_BASE, BATT_I2C_ADDR, false);
+    I2CMasterDataPut(I2C1_BASE, cmd);
+    I2CMasterControl(I2C1_BASE, I2C_MASTER_CMD_SINGLE_SEND);
+    while(I2CMasterBusy(I2C1_BASE) && !I2CMasterTimeout(I2C1_BASE));
+    if (I2CMasterTimeout(I2C1_BASE)) {
+        batteryPresent = false;
+        return false;
+    }
+    I2CMasterSlaveAddrSet(I2C1_BASE, BATT_I2C_ADDR, true);
+    I2CMasterControl(I2C1_BASE, I2C_MASTER_CMD_SINGLE_RECEIVE);
+    while(I2CMasterBusy(I2C1_BASE) && !I2CMasterTimeout(I2C1_BASE));
+    if (I2CMasterTimeout(I2C1_BASE)) {
+        batteryPresent = false;
+        return false;
+    }
+    data = I2CMasterDataGet(I2C1_BASE);
+    *dst = data;
+
+    return true;
+}
+
+uint16_t BattReadCharge(void) {
     uint8_t     soc_8[2];
     uint16_t    soc_16;
 
@@ -339,25 +387,8 @@ uint16_t BattReadSOC(void) {
         return 0xFFFF;
     }
 
-    I2CMasterSlaveAddrSet(I2C0_BASE, BATT_I2C_ADDR, false);
-    I2CMasterDataPut(I2C0_BASE, BATT_SOC_READ_LOW);
-    I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_SINGLE_SEND);
-    while(I2CMasterBusy(I2C0_BASE) && !I2CMasterTimeout(I2C0_BASE));
-    if (I2CMasterTimeout(I2C0_BASE) {
-        batteryPresent = false;
-        return 0xFFFF;
-    }
-    soc_8[0] = I2CMasterDataGet(I2C0_BASE);
-    
-    I2CMasterSlaveAddrSet(I2C0_BASE, BATT_I2C_ADDR, false);
-    I2CMasterDataPut(I2C0_BASE, BATT_SOC_READ_HIGH);
-    I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_SINGLE_SEND);
-    while(I2CMasterBusy(I2C0_BASE) && !I2CMasterTimeout(I2C0_BASE));
-    if (I2CMasterTimeout(I2C0_BASE) {
-        batteryPresent = false;
-        return 0xFFFF;
-    }
-    soc_8[1] = I2CMasterDataGet(I2C0_BASE);
+    I2CReadBattery(BATT_SOC_READ_LOW, &soc_8[0]);
+    I2CReadBattery(BATT_SOC_READ_HIGH, &soc_8[1]);
 
     soc_16 = soc_8[0] | (soc_8[1] << 8);
 

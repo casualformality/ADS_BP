@@ -522,6 +522,9 @@ void ADS1299AcquireSample(unsigned char nCh, int *chValues) {
 		chValues[iCh] = Interpret24bitAsInt32(temp);
 	}
 
+    // Wait 4*t_clk before pulling CS high
+	SysCtlDelay(ADS_CMD_DELAY);     // wait 3us
+
 	// Disable SPI comunication
 	GPIOPinWrite(ADS_NCS_PORT, ADS_NCS_PIN, ADS_NCS_PIN);
 
