@@ -231,70 +231,69 @@ float32_t FilterSample(float32_t inData, unsigned char filterIndex) {
 }
 
 /**
- * \brief This function is used to compress data before transmitting it.
- * @param[in] src int32_t array of input values
- * @param[in] len uint8_t length of source array
- * @param[out] dst int16_t array of destination array
- *
- * This function extends Mu-Law companding for compressing 32-bit values.
- */
-void CompressSamples(float32_t *src, uint8_t len, int16_t *dst)
-{
-    const uint32_t MULAW_EXT_MAX = 0x1FFFFFF;
-    const uint32_t MULAW_EXT_BIAS = 0x2100;
-    uint32_t mask;
-    uint16_t sign, position, lsb;
-    uint8_t idx;
-    int32_t number;
-
-    for (idx = 0; idx < len; idx++) {
-        mask = 0x1000000;
-        sign = 0;
-        position = 24;
-        lsb = 0;
-        number = (int32_t) (*src * 16777216.0f);
-
-        // Extract sign
-        if (number < 0)
-        {
-            number = -number;
-            sign = 0x8000;
-        }
-
-        // Add bias to ensure non-zero positions within the first 9 digits
-        number += MULAW_EXT_BIAS;
-
-        // Clip number to valid range
-        if (number > MULAW_EXT_MAX) {
-            number = MULAW_EXT_MAX;
-        }
-
-        // Calculate segment number
-        for(; ((number & mask) != mask && position >= 9); mask >>= 1, position--)
-            ;
-
-        // Calculate quantization bits
-        lsb = (number >> (position - 8)) & 0x00FF;
-
-        // Generate compressed sample
-        *dst =  (~(sign | ((position - 9) << 8) | lsb));
-
-        src++;
-        dst++;
-    }
-}
-
-
-/**
  * \brief This function can be used to easily handle the reception on the
  * UART of 4bytes sized variables, e. g. float.
  * @param[in] *ptr points the variable to receive
  * @return none.
  */
-void UARTReceive4Bytes(uint32_t *ptr) {
+bool UARTReceive4Bytes(uint32_t *ptr) {
+    uint32_t    bytes[4];
+    bool        error = true;
 
-	*ptr = ((0xFF & UARTCharGet(COMM_UARTPORT)) << 24) | ((0xFF & UARTCharGet(COMM_UARTPORT)) << 16) | ((0xFF & UARTCharGet(COMM_UARTPORT)) << 8) | (0xFF & UARTCharGet(COMM_UARTPORT));
+    if (!UARTReceiveByte((uint8_t *) &bytes[0]) && !UARTReceiveByte((uint8_t *) &bytes[1]) &&
+            !UARTReceiveByte((uint8_t *) &bytes[2]) && !UARTReceiveByte((uint8_t *) &bytes[3])) {
+        *ptr = ((0xFF & bytes[0]) << 24) | ((0xFF & bytes[1]) << 16) |
+                ((0xFF & bytes[2]) << 8) | (0xFF & bytes[3]);
+        error = false;
+    }
 
+    return error;
+}
+
+/**
+ * \brief This function can be used to easily handle the transmission on the
+ * UART of one byte. It is meant to prevent miscommunications from freezing
+ * the device.
+ * @param[in] *ptr points the variable to receive
+ * @return none.
+ */
+bool UARTReceiveByte(uint8_t *ptr) {
+    int32_t     byte;
+
+    bool        error = true;
+    uint32_t    lastTick, currentTick, elapsedTicks;
+    uint32_t    timeout = COMM_TIMEOUT;
+
+    currentTick = SysTickValueGet();
+    lastTick = currentTick;
+
+    while (timeout > 0) {
+        byte = UARTCharGetNonBlocking(COMM_UARTPORT);
+        if (byte != -1) {
+            // Communication successful
+            *ptr = (int8_t) byte;
+            error = false;
+            break;
+        }
+
+        elapsedTicks = lastTick-currentTick;
+        if(timeout <= elapsedTicks) {
+            // Communication timeout
+            break;
+        } else {
+            // Still waiting...
+            timeout = timeout - elapsedTicks;
+        }
+
+        // Handle update and SysTick looping
+        lastTick = currentTick;
+        currentTick = SysTickValueGet();
+        if (lastTick < currentTick) {
+            lastTick = lastTick + TICK_PERIOD;
+        }
+    }
+
+    return error;
 }
 
 /**
@@ -326,7 +325,7 @@ void UARTSend2Bytes(unsigned char *ptr) {
 
 	unsigned char k, byte;
 
-	ptr += 2;
+	ptr += 1;
 	for(k=0; k<sizeof(int16_t); k++) {
 		byte = *ptr;
 		UARTSendByte(byte);
@@ -347,6 +346,10 @@ void UARTSendByte(unsigned char byte) {
 
 }
 
+/**
+ * \brief This function is used to handle I2C timeouts if the BATPACKMKII board
+ * is not responding or not present.
+ */
 bool I2CMasterTimeout(uint32_t ui32Base) {
     if(HWREG(ui32Base + I2C_O_MCS) & I2C_MCS_CLKTO) {
         return true;
@@ -355,6 +358,13 @@ bool I2CMasterTimeout(uint32_t ui32Base) {
     }
 }
 
+/**
+ * \brief This function is used to read a 16 bit value from a BATPACKMKII
+ * battery board via the I2C bus.
+ * @param[in] command to send
+ * @param[out] *dst points to the variable to recieve
+ * @return none.
+ */
 bool I2CReadBattery(uint8_t cmd, uint8_t *dst) {
     uint8_t     data;
 
@@ -379,18 +389,23 @@ bool I2CReadBattery(uint8_t cmd, uint8_t *dst) {
     return true;
 }
 
+/*
+ * \brief This function is used to read the battery voltage from a BATPACKMKII
+ * battery board.
+ * @return battery volgate in millivolts, or 0xFFFF if read unsuccessfull
+ */
 uint16_t BattReadCharge(void) {
-    uint8_t     soc_8[2];
-    uint16_t    soc_16;
+    uint8_t     volt_8[2];
+    uint16_t    volt_16;
 
     if (!batteryPresent) {
         return 0xFFFF;
     }
 
-    I2CReadBattery(BATT_SOC_READ_LOW, &soc_8[0]);
-    I2CReadBattery(BATT_SOC_READ_HIGH, &soc_8[1]);
+    I2CReadBattery(BATT_VOLT_READ_LOW, &volt_8[0]);
+    I2CReadBattery(BATT_VOLT_READ_HIGH, &volt_8[1]);
 
-    soc_16 = soc_8[0] | (soc_8[1] << 8);
+    volt_16 = volt_8[0] | (volt_8[1] << 8);
 
-    return soc_16;
+    return volt_16;
 }

@@ -74,11 +74,10 @@ volatile unsigned char timer = false;
 volatile uint32_t sF = 1000;
 volatile char message[100];
 volatile unsigned char btStatus = WT12_NOTPRESENT;
-volatile float32_t batterySOC;
+volatile float32_t batteryVolt;
 
 extern volatile unsigned char nChannels;
 extern volatile unsigned char filterEnable;
-extern volatile unsigned char compressionEnable;
 extern const float32_t lsbVolt;
 extern volatile unsigned char btStatus;
 extern volatile float32_t temperatureMCU;
@@ -110,7 +109,10 @@ void COMM_IntHandler(void) {
 	switch (received)
 	{
 		case TEST_CONNECTION: // Test connection, it echos the received 'C' after the 'A'
-			UARTSendByte(UARTCharGet(COMM_UARTPORT));
+		    if (UARTReceiveByte((uint8_t *) &received)) {
+		        break;
+		    }
+			UARTSendByte(received);
 		break;
 		case DEVNAME_FIRMWAREV_READ: // Firmware Version & Device number
 			UARTSendByte(DEVNAME_FIRMWAREV_READ);
@@ -129,62 +131,54 @@ void COMM_IntHandler(void) {
 		break;
 		case SAMPLING_FREQ_SET: // Set the sampling frequency
 			UARTSendByte(SAMPLING_FREQ_SET);
-			UARTReceive4Bytes((uint32_t *)&sF);
+			if (UARTReceive4Bytes((uint32_t *)&sF)) {
+			    break;
+			}
 			if(sF!=500 && sF!=1000 && sF!= 2000)
 				sF = 1000;
 			UARTSendByte(SAMPLING_FREQ_SET);
 		break;
 		case FILTERS_ENABLE_SET: // Enable/Disable Filters
 			UARTSendByte(FILTERS_ENABLE_SET);
-			received = UARTCharGet(COMM_UARTPORT);
+			if(UARTReceiveByte((uint8_t *) &received)) {
+			    break;
+			}
 			filterEnable = received;
 			UARTSendByte(FILTERS_ENABLE_SET);
 		break;
         case BATTERY_CHECK:
             UARTSendByte(BATTERY_CHECK);
-            batterySOC = (float32_t) BattReadCharge();
-            UARTSend4Bytes((unsigned char *)&batterySOC);
+            batteryVolt = (float32_t) BattReadCharge();
+            UARTSend4Bytes((unsigned char *)&batteryVolt);
             UARTSendByte(BATTERY_CHECK);
         break;
 		case ADS1299_GAIN_SET: // Set ADS1299 Gain
 			UARTSendByte(ADS1299_GAIN_SET);
-			received = UARTCharGet(COMM_UARTPORT);
+			if (UARTReceiveByte((uint8_t *) &received)) {
+			    break;
+			}
 			ADS1299SetInputModeSetGain(0x00,received);
 			UARTSendByte(ADS1299_GAIN_SET);
 		break;
 		case ADS1299_DATARATE_SET: // Set ADS1299 output data rate
 			UARTSendByte(ADS1299_DATARATE_SET);
-			received = UARTCharGet(COMM_UARTPORT);
+			if (UARTReceiveByte((uint8_t *) &received)) {
+                break;
+            }
 			ADS1299SetDataRate(received);
 			UARTSendByte(ADS1299_DATARATE_SET);
 		break;
-        case START_ACQ_COMP: // Start EMG continuous acquisition with compression
-            batterySOC = (float32_t) BattReadCharge();
-            if (batterySOC != 0 && batterySOC < 20) {
-                nChannels = UARTCharGet(COMM_UARTPORT);
-                UARTSendByte(ERROR_BATTERY_LOW);
-            } else {
-                alcdState = ACQUIRE_EMG;
-                compressionEnable = true;
-                nChannels = UARTCharGet(COMM_UARTPORT);
-                if(nChannels>8)
-                    nChannels = 8;
-                TimerLoadSet(TIMER2_BASE, TIMER_A, clockFreq/10);
-                ADS1299ReadContinuousMode();
-                TimerLoadSet(TIMER0_BASE, TIMER_A, clockFreq/sF);
-                TimerEnable(TIMER0_BASE, TIMER_A);
-                UARTSendByte(START_ACQ_COMP);
-            }
-        break;
 		case START_ACQ: // Start EMG continuous acquisition
-		    batterySOC = (float32_t) BattReadCharge();
-            if (batterySOC != 0 && batterySOC < 20) {
-                nChannels = UARTCharGet(COMM_UARTPORT);
+            if (batteryVolt != 0.0f && batteryVolt < BATT_MIN_VOLT) {
+                if(UARTReceiveByte((uint8_t *) &nChannels)) {
+                    break;
+                }
                 UARTSendByte(ERROR_BATTERY_LOW);
             } else {
                 alcdState = ACQUIRE_EMG;
-                compressionEnable = false;
-                nChannels = UARTCharGet(COMM_UARTPORT);
+                if(UARTReceiveByte((uint8_t *) &nChannels)) {
+                    break;
+                }
                 if(nChannels>8)
                     nChannels = 8;
                 TimerLoadSet(TIMER2_BASE, TIMER_A, clockFreq/10);
@@ -203,11 +197,11 @@ void COMM_IntHandler(void) {
 			UARTSendByte(STOP_ACQ);
 		break;
 		default:
-		    UARTSendByte('x');
 			/* This case is actually useful to handle any unneeded message sent from the WT12 bluetooth module:
 			 * "WRAP THOR ..." message sent just after power on or reset
 			 * "NO CARRIER 0 ERROR" message sent when it is not connected to master
 			 * "RING 0 MACaddress" message sent when it is connected
+			 */
 			timer = false;
 			message[0] = received;
 			i = 1;
@@ -230,7 +224,6 @@ void COMM_IntHandler(void) {
 			if(!strncmp((const char*)&message[0], "RING", 4)) {
 				btStatus = WT12_CONNECTED;
 			}
-             */
 		break;
 	}
 
@@ -249,7 +242,6 @@ void Timer0IntHandler(void)
 
 	int32_t channels[8];
 	float32_t newSample[8];
-    int16_t comSample[8];
 	unsigned char iCh = 0;
 	float32_t tempFloatValue;
     uint32_t dSamp;
@@ -278,11 +270,6 @@ void Timer0IntHandler(void)
 			newSample[iCh] = FilterSample(tempFloatValue, iCh);
 		}
 
-		// optionally compress data before transmitting
-        if(compressionEnable) {
-            CompressSamples(newSample, nChannels, comSample);
-        }
-
 		// Do whatever needs to be done accordingly to the state machine
 		switch(alcdState)
 		{
@@ -290,11 +277,7 @@ void Timer0IntHandler(void)
 			case ACQUIRE_EMG:
 				for(iCh=0; iCh<nChannels; iCh++) {
 					// send via UART
-                    if(compressionEnable) {
-                        UARTSend2Bytes((unsigned char *)&comSample[iCh]);
-                    } else {
-					    UARTSend4Bytes((unsigned char *)&newSample[iCh]);
-                    }
+                    UARTSend4Bytes((unsigned char *)&newSample[iCh]);
 				}
 			break;
 			default:
@@ -424,18 +407,23 @@ void DeviceInit(void) {
 	GPIOPinTypeGPIOOutput(GPIO_PORTF_BASE, GPIO_PIN_1);
 	STATUS_LED_OFF;
 
-	//* =================UART3 Initialization======================= */
-	SysCtlPeripheralEnable(SYSCTL_PERIPH_UART0);
-	GPIOPinConfigure(GPIO_PA0_U0RX);
-	GPIOPinConfigure(GPIO_PA1_U0TX);
+	//* =================UART1 Initialization======================= */
+    // Communication over ADS_BP board
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_UART1);
+    GPIOPinConfigure(GPIO_PB0_U1RX);
+    GPIOPinConfigure(GPIO_PB1_U1TX);
 	//GPIOPinConfigure(GPIO_PF0_U1RTS);
 	//GPIOPinConfigure(GPIO_PF1_U1CTS);
-	GPIOPinTypeUART(GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1);
+	GPIOPinTypeUART(GPIO_PORTB_BASE, GPIO_PIN_0 | GPIO_PIN_1);
 	UARTConfigSetExpClk(COMM_UARTPORT, clockFreq, 460800, (UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE | UART_CONFIG_PAR_NONE));
 	IntPrioritySet(COMM_UARTINT, 0x20);
 	priorityCOMM = IntPriorityGet(COMM_UARTINT);
 	IntEnable(COMM_UARTINT);
 	UARTIntEnable(COMM_UARTPORT, UART_INT_RX | UART_INT_RT);
+
+    // SysTick is used to handle UART communication timeouts
+	SysTickPeriodSet(TICK_PERIOD);
+	SysTickEnable();
 
 	/* =================SPI Initialization======================= */
 	SysCtlPeripheralEnable(ADS_SSI_PHERIPH);		// SPI for ADS1299

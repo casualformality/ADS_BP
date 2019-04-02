@@ -31,6 +31,7 @@
 #include "driverlib/timer.h"
 #include "inc/hw_memmap.h"
 #include "inc/hw_types.h"
+#include "driverlib/systick.h"
 
 #include "ADS1299.h"
 
@@ -47,14 +48,16 @@
 #define ADS1299_LEADOFF_GET      'g'
 #define SAMPLING_FREQ_SET		 'r'
 #define BATTERY_CHECK            'B'
-#define START_ACQ_COMP           'Q'
 #define START_ACQ			 	 'G'
 #define STOP_ACQ				 'T'
 
 #define ERROR_BATTERY_LOW        'B'
 
-#define COMM_UARTPORT			  UART0_BASE
-#define COMM_UARTINT			  INT_UART0
+#define COMM_UARTPORT             UART1_BASE
+#define COMM_UARTINT              INT_UART1
+
+#define COMM_TIMEOUT            80000000    // 1 second timeout
+#define TICK_PERIOD             16000000
 
 // BT module
 #define WT12_NOTPRESENT         0x00
@@ -63,8 +66,9 @@
 
 // BATTPACK module
 #define BATT_I2C_ADDR           0x55
-#define BATT_SOC_READ_LOW       0x1C
-#define BATT_SOC_READ_HIGH      0x1D
+#define BATT_VOLT_READ_LOW      0x04
+#define BATT_VOLT_READ_HIGH     0x05
+#define BATT_MIN_VOLT           3.10f
 
 /* structures */
 
@@ -73,7 +77,8 @@
 void ResetFilterArrays(unsigned char nCh);
 float32_t FilterSample(float32_t inData, unsigned char filterIndex);
 void CompressSamples(float32_t *src, uint8_t len, int16_t *dst);
-void UARTReceive4Bytes(uint32_t *ptr);
+bool UARTReceive4Bytes(uint32_t *ptr);
+bool UARTReceiveByte(uint8_t *ptr);
 void UARTSend4Bytes(unsigned char *ptr);
 void UARTSend2Bytes(unsigned char *ptr);
 void UARTSendByte(unsigned char byte);
