@@ -54,11 +54,325 @@ float32_t yvN[NPOLES+1][8];
 volatile unsigned char nChannels = 8;
 volatile unsigned char filterEnable = 1;
 volatile unsigned char compressionEnable = 0;
+volatile unsigned char waveletMode;
 extern volatile uint32_t sF;
 volatile unsigned char batteryPresent = 1;
+waveletCoefficients coeffs;
 
 
 /* functions */
+
+void FilterTimeWindow(float32_t **samples) {
+    uint8_t channel;
+
+    for (channel=0; channel<nChannels; channel++) {
+        SWTTimeWindow(samples[channel]);
+        if(waveletMode) {
+            DenoiseCoefficients();
+            DeartifactCoefficients();
+        }
+        ISWTTimeWindow(samples[channel]);
+    }
+}
+
+/**
+ * \brief Needed to change the wavelet parameters when changing sampling
+ * frequency or window size.
+ * @param[out]  *coeffs structure to store wavelet coefficients in
+ * @return none.
+ */
+void UpdateWaveletCoefficients(void) {
+	switch(sF) {
+	case 500:
+		coeffs.noiseWlevel 	    = 1;
+		coeffs.dominantWlevel 	= 0;
+	break;
+	case 2000:
+		coeffs.noiseWlevel		= 0;
+		coeffs.dominantWlevel	= 2;
+	break;
+	default:    // 1000
+		coeffs.noiseWlevel 	    = 0;
+		coeffs.dominantWlevel 	= 1;
+	}
+	coeffs.minimaxiFactor = 0.3936 + 0.1829*(log(timeWindowSamples)/log(2));
+}
+
+/**
+ * \brief Perform denoising on wavelet coefficients
+ * @return none.
+ *
+ * This function should not be called directly. It is a helper function
+ * for FilterTimeWindow. It performs signal denoising and Wiener wavelet 
+ * filtering on a set of wavelet coefficients.
+ */
+void DenoiseCoefficients(void) {
+	float32_t   sigma, thr, thr2, wcf, var;
+	uint32_t    lvl, sampleIdx;
+	uint32_t 	windowLen = timeWindowSamples;
+
+	// Use the highest non-dominant frequency band to find STD_DEV and variance
+	arm_std_f32(coeffs.cD[coeffs.noiseWlevel], windowLen, &sigma);
+	var = sigma*sigma;
+
+	// Calculate noise threshold
+	thr = sigma*coeffs.minimaxiFactor;
+	thr2 = thr*thr;
+
+	switch(waveletMode) {
+	case WAVE_TYPE_SOFT:	// Soft Thresholding
+		for(lvl=0;lvl<WAVE_LEVEL;lvl++) {
+			for(sampleIdx=0;sampleIdx<windowLen;sampleIdx++) {
+				wcf = fabsf(coeffs.cD[lvl][sampleIdx]);
+				wcf = (wcf>thr)*(wcf-thr);
+				wcf = wcf*wcf;
+				coeffs.cD[lvl][sampleIdx] *= wcf/(wcf+var);
+			}
+		}
+
+		for(sampleIdx=0;sampleIdx<windowLen;sampleIdx++) {
+			wcf = fabsf(coeffs.cA[sampleIdx]);
+			wcf = (wcf>thr)*(wcf-thr);
+			wcf = wcf*wcf;
+			coeffs.cA[sampleIdx] *= wcf/(wcf+var);
+		}
+	break;
+	case WAVE_TYPE_HARD: // Hard Thresholding
+		for(lvl=0;lvl<WAVE_LEVEL;lvl++) {
+			for(sampleIdx=0;sampleIdx<windowLen;sampleIdx++) {
+				wcf = fabsf(coeffs.cD[lvl][sampleIdx]);
+				wcf = (wcf>thr)*wcf*wcf;
+				coeffs.cD[lvl][sampleIdx] *= wcf/(wcf+var);
+			}
+		}
+
+		for(sampleIdx=0;sampleIdx<windowLen;sampleIdx++) {
+			wcf = fabsf(coeffs.cA[sampleIdx]);
+			wcf = (wcf>thr)*wcf*wcf;
+			coeffs.cA[sampleIdx] *= wcf/(wcf+var);
+		}
+	break;
+	case WAVE_TYPE_HYPER: // Semi-Hyperbolic Shrinkage
+		for(lvl=0;lvl<WAVE_LEVEL;lvl++) {
+			for(sampleIdx=0;sampleIdx<windowLen;sampleIdx++) {
+				wcf = fabsf(coeffs.cD[lvl][sampleIdx]);
+				wcf = (wcf>thr)*(wcf*wcf-thr2);
+				coeffs.cD[lvl][sampleIdx] *= wcf/(wcf+var);
+			}
+		}
+
+		for(sampleIdx=0;sampleIdx<windowLen;sampleIdx++) {
+			wcf = fabsf(coeffs.cA[sampleIdx]);
+			wcf = (wcf>thr)*(wcf*wcf-thr2);
+			coeffs.cA[sampleIdx] *= wcf/(wcf+var);
+		}
+	break;
+	case WAVE_TYPE_ADAPT: // Adaptive Denoising Shrinkage
+		for(lvl=0;lvl<WAVE_LEVEL;lvl++) {
+			for(sampleIdx=0;sampleIdx<windowLen;sampleIdx++) {
+				wcf = coeffs.cD[lvl][sampleIdx];
+				wcf = wcf - thr + (2*thr)/(1+exp(2.1*wcf/thr));
+				wcf = wcf*wcf;
+				coeffs.cD[lvl][sampleIdx] *= wcf/(wcf+var);
+			}
+		}
+
+		for(sampleIdx=0;sampleIdx<windowLen;sampleIdx++) {
+			wcf = (coeffs.cA[sampleIdx]);
+			wcf = wcf - thr + (2*thr)/(1+exp(2.1*wcf/thr));
+			wcf = wcf*wcf;
+			coeffs.cA[sampleIdx] *= wcf/(wcf+var);
+		}
+	break;
+	case WAVE_TYPE_NNEG: // Non-Negative
+		for(lvl=0;lvl<WAVE_LEVEL;lvl++) {
+			for(sampleIdx=0;sampleIdx<windowLen;sampleIdx++) {
+				wcf = coeffs.cD[lvl][sampleIdx];
+				wcf = (fabsf(wcf)>thr) ? (wcf-(thr2/wcf)) : (0);
+				wcf = wcf*wcf;
+				coeffs.cD[lvl][sampleIdx] *= wcf/(wcf+var);
+			}
+		}
+
+		for(sampleIdx=0;sampleIdx<windowLen;sampleIdx++) {
+			wcf = (coeffs.cA[sampleIdx]);
+			wcf = (fabsf(wcf)>thr) ? (wcf-(thr2/wcf)) : (0);
+			wcf = wcf*wcf;
+			coeffs.cA[sampleIdx] *= wcf/(wcf+var);;
+		}
+	break;
+	}
+}
+
+/**
+ * \brief Perform artifact reduction on wavelet coefficients
+ * @return none.
+ *
+ * This function should not be called directly. It is a helper function
+ * for FilterTimeWindow. It performs motion artifact reduction on a set
+ * of wavelet coefficients.
+ */
+void DeartifactCoefficients(void) {
+	float32_t   sigma, thr_a, mabs;
+	uint32_t    lvl, sampleIdx;
+	uint32_t 	windowLen = timeWindowSamples;
+	uint8_t 	domWlevel = coeffs.dominantWlevel;
+
+	// Use the dominant frequency band to find MABS and STD_DEV
+	arm_std_f32(coeffs.cD[domWlevel], windowLen, &sigma);
+
+	mabs = 0;
+	for(sampleIdx=0;sampleIdx<windowLen;sampleIdx++) {
+		mabs += fabs(coeffs.cD[domWlevel][sampleIdx]);
+	}
+
+	mabs /= windowLen;
+	thr_a = mabs + sigma;
+
+	for(sampleIdx=0;sampleIdx<windowLen;sampleIdx++) {
+		if(fabs(coeffs.cA[sampleIdx]) > thr_a) {
+            coeffs.cA[sampleIdx] = 0;
+
+			for(lvl=0;lvl<WAVE_LEVEL;lvl++) {
+				if(fabs(coeffs.cD[lvl][sampleIdx]) > mabs) {
+					coeffs.cD[lvl][sampleIdx] = 0;
+				}
+			}
+		}
+	}
+}
+
+/**
+ * \brief Performs circular convolution.
+ * @param[in] *pSrcA Pointer to signal to convolve
+ * @param[in] srcALen Length of signal
+ * @param[in] *pSrcB Pointer to filter
+ * @param[in] srcBLen Length of filter
+ * @param[in] *pDst Pointer to convolution destination. Must be at least srcALen long
+ * @return none.
+ *
+ * This function performs convolution with periodic padding to
+ * evaluate the SWT/ISWT correctly.
+ */
+void circ_conv_f32(float32_t *pSrcA, uint32_t srcALen,
+        float32_t *pSrcB, uint32_t srcBLen, float32_t *pDst)
+{
+    uint32_t    offset = (srcBLen>>1u)-1u;
+    uint32_t    scratchLen = srcALen+srcBLen-1u;
+
+    arm_copy_f32(&pSrcA[srcALen-offset], coeffs.s_tmp, offset);
+    arm_copy_f32(pSrcA, &coeffs.s_tmp[offset], srcALen);
+    arm_copy_f32(pSrcA, &coeffs.s_tmp[srcALen+offset], srcBLen-offset-1);
+    // In this function, we lie about the pointer to pDst.
+    // Elements [pDst-srcBLen+1 : pDst-1] are unused, so it is safe to do this.
+    arm_conv_partial_f32(coeffs.s_tmp, scratchLen,
+                         pSrcB, srcBLen, pDst-(srcBLen-1),
+                         srcBLen-1, srcALen);
+}
+
+/**
+ * \brief Performs the SWT on a set of data.
+ * @param[in] *ptrSamples data window to transform
+ * @param[in] *ptrCoeffs structure to store wavelet coefficients in
+ * @return none.
+ *
+ * This function should not be called directly. It is a helper function
+ * for FilterTimeWindow. It is necessary to perform denoising and
+ * artifact reduction.
+ */
+void SWTTimeWindow(float32_t *ptrSamples) {
+	float32_t 	hi_d[32] = {-0.4830, 0.8365, -0.2241, -0.1294};
+	float32_t 	lo_d[32] = {-0.1294, 0.2241,  0.8365,  0.4830};
+	uint32_t    lvl, fIdx;
+	uint32_t 	windowLen = timeWindowSamples;
+	uint32_t    fSize = FILTER_LEN;
+
+	circ_conv_f32(ptrSamples,windowLen,hi_d,FILTER_LEN,coeffs.cD[0]);
+	circ_conv_f32(ptrSamples,windowLen,lo_d,FILTER_LEN,coeffs.cA);
+
+	for(lvl=1;lvl<WAVE_LEVEL;lvl++) {
+		// Upsample filters
+		for(fIdx=FILTER_LEN-1;fIdx>0;fIdx--) {
+			hi_d[fIdx<<lvl] = hi_d[fIdx<<(lvl-1)];
+			hi_d[fIdx<<(lvl-1)] = 0;
+
+			lo_d[fIdx<<lvl] = lo_d[fIdx<<(lvl-1)];
+			lo_d[fIdx<<(lvl-1)] = 0;
+		}
+
+		fSize   =  FILTER_LEN*(1 << lvl);
+		circ_conv_f32(coeffs.cA,windowLen,hi_d,fSize,coeffs.cD[lvl]);
+		circ_conv_f32(coeffs.cA,windowLen,lo_d,fSize,coeffs.o_tmp);
+		arm_copy_f32(coeffs.o_tmp, coeffs.cA, windowLen);
+	}
+}
+
+/**
+ * \brief Performs the ISWT on a set of coefficients
+ * @param[in] pDestination pointer to store time-domain data in
+ * @param[in] ptrCoeffs structure containing wavelet coefficients
+ * @return none.
+ *
+ * This function should not be called directly. It is a helper function
+ * for FilterTimeWindow. It reconstructs a time window from wavelet
+ * coefficients.
+ */
+void ISWTTimeWindow(float32_t *pDestination) {
+	float32_t   hi_r[FILTER_LEN] = {-0.1294, -0.2241,  0.8365, -0.4830};
+	float32_t   lo_r[FILTER_LEN] = { 0.4830,  0.8365,  0.2241, -0.1294};
+	int32_t     lvl; // This has to be signed, or we'll hit an infinite loop!
+	uint32_t    dstIdx, srcIdx, first, step, sub;
+	uint32_t 	windowLen = timeWindowSamples;
+
+	for(lvl=WAVE_LEVEL-1;lvl>=0;lvl--) {
+		step = (1 << lvl);
+		// Loop over all possible offsets for given step size
+		for(first=0;first<step;first++) {
+			arm_fill_f32(0,coeffs.c_tmp,windowLen);
+			sub = (step << 1);
+
+			// Even indexes
+			for(srcIdx=first,dstIdx=0;srcIdx<windowLen;srcIdx+=sub,dstIdx+=2) {
+				coeffs.c_tmp[dstIdx] = coeffs.cA[srcIdx];
+			}
+			circ_conv_f32(coeffs.c_tmp,dstIdx,lo_r,FILTER_LEN,coeffs.o_tmp);
+			arm_copy_f32(coeffs.o_tmp, &coeffs.x_tmp[1], dstIdx-1);
+			coeffs.x_tmp[0] = coeffs.o_tmp[dstIdx-1];
+
+			for(srcIdx=first,dstIdx=0;srcIdx<windowLen;srcIdx+=sub,dstIdx+=2) {
+				coeffs.c_tmp[dstIdx] = coeffs.cD[lvl][srcIdx];
+			}
+			circ_conv_f32(coeffs.c_tmp,dstIdx,hi_r,FILTER_LEN,coeffs.o_tmp);
+			arm_add_f32(coeffs.o_tmp, &coeffs.x_tmp[1], &coeffs.x_tmp[1], dstIdx-1);
+			coeffs.x_tmp[0] += coeffs.o_tmp[dstIdx-1];
+
+			// Odd indexes
+			for(srcIdx=first+step,dstIdx=0;srcIdx<windowLen;srcIdx+=sub,dstIdx+=2) {
+				coeffs.c_tmp[dstIdx] = coeffs.cA[srcIdx];
+			}
+			circ_conv_f32(coeffs.c_tmp,dstIdx,lo_r,FILTER_LEN,coeffs.o_tmp);
+			arm_add_f32(coeffs.o_tmp, &coeffs.x_tmp[2], &coeffs.x_tmp[2], dstIdx-2);
+			coeffs.x_tmp[0] += coeffs.o_tmp[dstIdx-2];
+			coeffs.x_tmp[1] += coeffs.o_tmp[dstIdx-1];
+
+			for(srcIdx=first+step,dstIdx=0;srcIdx<windowLen;srcIdx+=sub,dstIdx+=2) {
+				coeffs.c_tmp[dstIdx] = coeffs.cD[lvl][srcIdx];
+			}
+			circ_conv_f32(coeffs.c_tmp,dstIdx,hi_r,FILTER_LEN,coeffs.o_tmp);
+			arm_add_f32(coeffs.o_tmp, &coeffs.x_tmp[2], &coeffs.x_tmp[2], dstIdx-2);
+			coeffs.x_tmp[0] += coeffs.o_tmp[dstIdx-2];
+			coeffs.x_tmp[1] += coeffs.o_tmp[dstIdx-1];
+
+			// Average entries
+			for(dstIdx=first,srcIdx=0;dstIdx<windowLen;dstIdx+=step,srcIdx++) {
+				coeffs.cA[dstIdx] = 0.5*coeffs.x_tmp[srcIdx];
+			}
+		}
+	}
+
+	// Results stored in coeffs.cA
+}
+
 /**
  * \brief It filters a new sample applying a IIR high-pass filter in real time.
  * @param[in] inData float input value

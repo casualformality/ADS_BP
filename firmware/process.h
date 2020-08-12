@@ -42,6 +42,8 @@
 #define DEVNAME_FIRMWAREV_READ	 0xA0
 #define ADS1299_REGS_READ		 'S'
 #define FILTERS_ENABLE_SET		 'H'
+#define SWT_ENABLE_SET           'w'
+#define COMPRESS_ENABLE_SET      'c'
 #define ADS1299_GAIN_SET		 'K'
 #define ADS1299_DATARATE_SET	 'F'
 #define ADS1299_LEADOFF_SET      'I'
@@ -70,10 +72,32 @@
 #define BATT_VOLT_READ_HIGH     0x05
 #define BATT_MIN_VOLT           3.10f
 
+// SWT parameters
+#define TIME_WINDOW_SAMPLES     256	// 256 ms of time window
+#define FILTER_LEN 				4
+#define WAVE_LEVEL 				4
+#define OUTPUT_LEN 				287 //(TIME_WINDOW_SAMPLES+32-1)
+
 /* structures */
+typedef struct
+{
+    // Approximation and Detail coefficients for SWT
+	float32_t 	cA[TIME_WINDOW_SAMPLES];
+	float32_t 	cD[WAVE_LEVEL][TIME_WINDOW_SAMPLES];
+
+	// Buffers used for SWT/ISWT processing
+	float32_t   s_tmp[OUTPUT_LEN];
+    float32_t   o_tmp[TIME_WINDOW_SAMPLES];
+	float32_t   c_tmp[TIME_WINDOW_SAMPLES];
+	float32_t   x_tmp[TIME_WINDOW_SAMPLES];
+} waveletCoefficients;
 
 
 /* prototypes */
+void FilterTimeWindow(void);
+void UpdateWaveletCoefficients(void);
+void DeartifactCoefficients(void);
+void DenoiseCoefficients(void);
 void ResetFilterArrays(unsigned char nCh);
 float32_t FilterSample(float32_t inData, unsigned char filterIndex);
 void CompressSamples(float32_t *src, uint8_t len, int16_t *dst);

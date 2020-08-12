@@ -81,6 +81,8 @@ extern volatile unsigned char filterEnable;
 extern const float32_t lsbVolt;
 extern volatile unsigned char btStatus;
 extern volatile float32_t temperatureMCU;
+extern volatile unsigned char compressionEnabled;
+extern volatile unsigned char waveletMode;
 
 // Only for test
 int32_t	priorityCOMM = 100;
@@ -167,6 +169,32 @@ void COMM_IntHandler(void) {
             }
 			ADS1299SetDataRate(received);
 			UARTSendByte(ADS1299_DATARATE_SET);
+		break;
+        case SWT_ENABLE_SET:
+        /*
+         * Note: At the moment, the code to store and extract features from
+         *  EMG signals is proprietary. Developers interested in using this
+         *  feature will currently need to write their own implementation.
+         */
+            UARTSendByte(SWT_ENABLE_SET);
+			if (UARTReceiveByte((uint8_t *) &received)) {
+			    break;
+			}
+            waveletMode = received;
+			UARTSendByte(SWT_ENABLE_SET);
+		break;
+        case COMPRESS_ENABLE_SET:
+        /*
+         * Note: At the moment, the code to implement this is based off an
+         *  unpublished manuscript. The code for this will be released pending
+         *  either publication or a decision to abandon the manuscript.
+         */
+			UARTSendByte(COMPRESS_ENABLE_SET);
+			if (UARTReceiveByte((uint8_t *) &received)) {
+			    break;
+			}
+            compressionEnabled = received;
+			UARTSendByte(COMPRESS_ENABLE_SET);
 		break;
 		case START_ACQ: // Start EMG continuous acquisition
             if (batteryVolt != 0.0f && batteryVolt < BATT_MIN_VOLT) {
